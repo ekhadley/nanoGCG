@@ -192,35 +192,35 @@ class GCG:
         N = len(completion_dataset)
         after_lens = torch.tensor([len(a) for a in after_lists], device=device)
         target_lens = torch.tensor([len(t) for t in target_lists], device=device)
-        max_after = int(after_lens.max())
-        max_target = int(target_lens.max())
+        combined_lens = after_lens + target_lens
+        max_combined = int(combined_lens.max())
 
         pad_id = tokenizer.pad_token_id
-        after_ids = torch.full((N, max_after), pad_id, dtype=torch.int64, device=device)
-        target_ids = torch.full((N, max_target), pad_id, dtype=torch.int64, device=device)
+        combined_ids = torch.full((N, max_combined), pad_id, dtype=torch.int64, device=device)
         for i in range(N):
-            after_ids[i, :len(after_lists[i])] = after_lists[i]
-            target_ids[i, :len(target_lists[i])] = target_lists[i]
+            al = len(after_lists[i])
+            tl = len(target_lists[i])
+            combined_ids[i, :al] = after_lists[i]
+            combined_ids[i, al:al + tl] = target_lists[i]
 
         before_len = before_ids.shape[0]
-        seq_len = before_len + optim_len + max_after + max_target
+        seq_len = before_len + optim_len + max_combined
 
         self.before_embeds = self.embedding_layer(before_ids).unsqueeze(0)
-        self.after_embeds = self.embedding_layer(after_ids)
-        self.target_embeds = self.embedding_layer(target_ids)
+        self.combined_embeds = self.embedding_layer(combined_ids)
 
         positions = torch.arange(seq_len, device=device).unsqueeze(0)
-        valid_lens = before_len + optim_len + after_lens + target_lens
+        valid_lens = before_len + optim_len + combined_lens
         self.attention_mask = (positions < valid_lens.unsqueeze(1)).to(torch.int64)
 
         labels = torch.full((N, seq_len), -100, dtype=torch.int64, device=device)
         for i in range(N):
-            t_start = before_len + optim_len + int(after_lens[i].item())
-            t_len = int(target_lens[i].item())
-            labels[i, t_start:t_start + t_len] = target_ids[i, :t_len]
+            al = int(after_lens[i].item())
+            tl = int(target_lens[i].item())
+            t_start = before_len + optim_len + al
+            labels[i, t_start:t_start + tl] = combined_ids[i, al:al + tl]
         self.labels = labels
 
-        self.target_ids = target_ids
         self.before_len = before_len
         self.optim_len = optim_len
         self.seq_len = seq_len
@@ -307,8 +307,7 @@ class GCG:
         input_embeds = torch.cat([
             self.before_embeds.expand(eb, -1, -1),
             optim_embeds_b,
-            self.after_embeds[indices],
-            self.target_embeds[indices],
+            self.combined_embeds[indices],
         ], dim=1)
         attention_mask = self.attention_mask[indices]
         labels = self.labels[indices]
